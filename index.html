@@ -186,9 +186,40 @@ const REGION_DEFS = [
   ]],
 ];
 
+// Territories and dependencies, quizzed only when "Include territories" is on.
+// Same format plus "^Sovereign" (shown as a hint, not needed when typing).
+const TERR_DEFS = {
+  na: '304 Greenland^Denmark; 060 Bermuda^UK; 666 Saint Pierre and Miquelon^France',
+  cb: '630 Puerto Rico^USA; 850 U.S. Virgin Islands|us virgin islands|usvi^USA; 092 British Virgin Islands|bvi^UK; 136 Cayman Islands|caymans^UK; 796 Turks and Caicos Islands|turks and caicos^UK; 660 Anguilla^UK; 500 Montserrat^UK; 533 Aruba^Netherlands; 531 Curaçao^Netherlands; 534 Sint Maarten^Netherlands; BQ Caribbean Netherlands|bonaire|bes islands^Netherlands; 663 Saint Martin^France; 652 Saint Barthélemy|saint barts|saint barths^France; GP Guadeloupe^France; MQ Martinique^France',
+  sa: 'GF French Guiana^France; 238 Falkland Islands|falklands|malvinas^UK; 239 South Georgia and the South Sandwich Islands|south georgia^UK',
+  neu: '234 Faroe Islands|faroes|faeroe islands^Denmark; 248 Åland|aland islands^Finland; SJ Svalbard and Jan Mayen|svalbard^Norway; 833 Isle of Man^UK (Crown Dependency); 831 Guernsey^UK (Crown Dependency); 832 Jersey^UK (Crown Dependency)',
+  eas: '344 Hong Kong^China (SAR); 446 Macau|macao^China (SAR)',
+  sas: '086 British Indian Ocean Territory|chagos islands|chagos^UK',
+  sea: 'CX Christmas and Cocos Islands|christmas island|cocos islands^Australia',
+  naf: '732 Western Sahara^Disputed (Morocco)',
+  waf: '654 Saint Helena|saint helena ascension and tristan da cunha^UK',
+  saf: 'RE Réunion^France; YT Mayotte^France',
+  aus: '540 New Caledonia^France; 574 Norfolk Island^Australia',
+  pac: '316 Guam^USA; 580 Northern Mariana Islands^USA; 016 American Samoa^USA; 258 French Polynesia|tahiti^France; 876 Wallis and Futuna^France; 184 Cook Islands^New Zealand; 570 Niue^New Zealand; TK Tokelau^New Zealand; 612 Pitcairn Islands|pitcairn^UK',
+};
+
 const MAP_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-50m.json';
 // Map pieces without an ISO id (or that should be dissolved into a country).
-const NAME_TO_CODE = { 'Kosovo': 'XK', 'Somaliland': '706', 'N. Cyprus': '196' };
+const NAME_TO_CODE = { 'Kosovo': 'XK', 'Somaliland': '706', 'N. Cyprus': '196', 'Indian Ocean Ter.': 'CX' };
+// Overseas parts that Natural Earth draws as part of the parent country:
+// [parent, new code, test on the polygon's centroid (lon, lat)].
+const SPLITS = [
+  ['250', 'GF', (x, y) => x > -56 && x < -50 && y > 1 && y < 7],
+  ['250', 'GP', (x, y) => x > -62 && x < -60.9 && y > 15.8 && y < 16.6],
+  ['250', 'MQ', (x, y) => x > -61.4 && x < -60.7 && y > 14.3 && y < 15],
+  ['250', 'RE', (x, y) => x > 55 && x < 56 && y > -21.5 && y < -20.7],
+  ['250', 'YT', (x, y) => x > 44.8 && x < 45.5 && y > -13.2 && y < -12.4],
+  ['528', 'BQ', (x, y) => x < -60],
+  ['578', 'SJ', (x, y) => y > 73.5 || x < 0],
+  ['554', 'TK', (x, y) => x < -170 && y > -12],
+];
+// Nicer names for the shapes that are never quizzed.
+const EXTRA_NAMES = { '260': 'French Southern & Antarctic Lands', '334': 'Heard & McDonald Islands', 'x-Siachen Glacier': 'Siachen Glacier (disputed)' };
 const TUVALU = [179.2, -8.52]; // not in the 50m dataset; drawn as a dot
 
 const norm = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
@@ -197,17 +228,22 @@ const norm = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 
 const CONTINENTS = [], REGIONS = {}, COUNTRY = {};
 let regionIdx = 0;
+function addItems(r, list, into) {
+  for (const item of list.split(';').map(s => s.trim()).filter(Boolean)) {
+    const sp = item.indexOf(' ');
+    const code = item.slice(0, sp);
+    const [names, terr] = item.slice(sp + 1).split('^');
+    const [nm, ...aliases] = names.split('|');
+    COUNTRY[code] = { code, name: nm, region: r.id, idx: r.codes.length + r.terr.length, terr, forms: [nm, ...aliases].map(norm) };
+    into.push(code);
+  }
+}
 for (const [cont, regs] of REGION_DEFS) {
   const c = { name: cont, regions: [] };
   for (const [id, name, list] of regs) {
-    const r = { id, name, cont, codes: [], hue: (regionIdx++ * 137.5 + 20) % 360 };
-    for (const item of list.split(';').map(s => s.trim()).filter(Boolean)) {
-      const sp = item.indexOf(' ');
-      const code = item.slice(0, sp);
-      const [nm, ...aliases] = item.slice(sp + 1).split('|');
-      COUNTRY[code] = { code, name: nm, region: id, idx: r.codes.length, forms: [nm, ...aliases].map(norm) };
-      r.codes.push(code);
-    }
+    const r = { id, name, cont, codes: [], terr: [], hue: (regionIdx++ * 137.5 + 20) % 360 };
+    addItems(r, list, r.codes);
+    addItems(r, TERR_DEFS[id] || '', r.terr);
     REGIONS[id] = r; c.regions.push(r);
   }
   CONTINENTS.push(c);
@@ -217,7 +253,7 @@ for (const [cont, regs] of REGION_DEFS) {
 // Persistence (per browser)
 // ---------------------------------------------------------------------------
 const STORE_KEY = 'countrydrill.v1';
-const store = { selected: [], learned: [], best: {}, stats: {}, labels: true };
+const store = { selected: [], learned: [], best: {}, stats: {}, labels: true, terr: false };
 try { Object.assign(store, JSON.parse(localStorage.getItem(STORE_KEY)) || {}); } catch (e) {}
 store.selected = store.selected.filter(id => REGIONS[id]);
 store.learned = store.learned.filter(id => REGIONS[id]);
@@ -258,7 +294,10 @@ function regionColor(rid, i = 0) {
 }
 const RES_FILL = { 1: 'var(--good)', 2: 'var(--ok)', 3: 'var(--meh)', x: 'var(--bad)' };
 const resCls = r => r ? 'r' + r : '';
-const nameOf = code => COUNTRY[code] ? COUNTRY[code].name : (FEATS.get(code)?.neName || '');
+const nameOf = code => COUNTRY[code] ? COUNTRY[code].name : (EXTRA_NAMES[code] || FEATS.get(code)?.neName || '');
+// Whether a country/territory can be selected and quizzed right now.
+const inPlay = code => !!COUNTRY[code] && (!COUNTRY[code].terr || store.terr);
+const regionCodes = r => store.terr ? [...r.codes, ...r.terr] : r.codes;
 const esc = s => s.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const fmtTime = ms => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
@@ -279,11 +318,26 @@ async function init() {
     if (!groups.has(code)) groups.set(code, []);
     groups.get(code).push(g);
   }
+  const shapes = new Map();
   for (const [code, gs] of groups) {
     const geometry = gs.length === 1 ? topojson.feature(topo, gs[0]).geometry : topojson.merge(topo, gs);
     const own = gs.find(g => g.id === code) || gs[0];
-    FEATS.set(code, makeFeat(code, { type: 'Feature', geometry }, own.properties.name));
+    shapes.set(code, { geometry, neName: own.properties.name });
   }
+  for (const [from, to, test] of SPLITS) {
+    const src = shapes.get(from);
+    if (!src || src.geometry.type !== 'MultiPolygon') continue;
+    const take = [], keep = [];
+    for (const p of src.geometry.coordinates) {
+      const [x, y] = d3.geoCentroid({ type: 'Polygon', coordinates: p });
+      (test(x, y) ? take : keep).push(p);
+    }
+    if (!take.length) continue;
+    src.geometry = { type: 'MultiPolygon', coordinates: keep };
+    if (shapes.has(to)) shapes.get(to).geometry.coordinates.push(...take);
+    else shapes.set(to, { geometry: { type: 'MultiPolygon', coordinates: take }, neName: COUNTRY[to]?.name || to });
+  }
+  for (const [code, s] of shapes) FEATS.set(code, makeFeat(code, { type: 'Feature', geometry: s.geometry }, s.neName));
   FEATS.set('TV', makeFeat('TV', { type: 'Feature', geometry: { type: 'Point', coordinates: TUVALU } }, 'Tuvalu'));
 
   for (const f of FEATS.values()) {
@@ -363,7 +417,7 @@ function project(codes) {
 function fillOf(code) {
   const c = COUNTRY[code];
   if (view === 'home') {
-    if (!c) return 'var(--land-off)';
+    if (!inPlay(code)) return 'var(--land-off)';
     return store.selected.includes(c.region) ? regionColor(c.region, c.idx) : 'var(--land)';
   }
   if (!active.has(code)) return 'var(--land-off)';
@@ -375,7 +429,7 @@ function fillOf(code) {
 }
 
 function clickable(code) {
-  if (view === 'home') return !!COUNTRY[code];
+  if (view === 'home') return inPlay(code);
   if (view === 'quiz') return q.mode === 'find' && active.has(code);
   return active.has(code);
 }
@@ -398,7 +452,7 @@ function labelWanted(f) {
 function rescale() {
   gL.attr('font-size', 11.5 / k).attr('stroke-width', 3 / k);
   for (const f of SOV) {
-    const show = view === 'home' || active.has(f.code);
+    const show = view === 'home' ? inPlay(f.code) : active.has(f.code);
     const mk = show && f.s * k < 7;
     f.mk.style.display = mk ? '' : 'none';
     if (mk) f.mk.setAttribute('r', 4.5 / k);
@@ -442,14 +496,18 @@ function setHover(code, on) {
   if (f.mk) f.mk.classList.toggle('hov', on);
 }
 function tipHtml(code) {
-  const c = COUNTRY[code], f = FEATS.get(code);
-  if (view === 'home') return c ? `${esc(c.name)}<div class="sub">${esc(REGIONS[c.region].name)} · click to ${store.selected.includes(c.region) ? 'remove' : 'add'}</div>` : esc(f.neName);
+  const c = COUNTRY[code];
+  const terr = c && c.terr ? `Territory · ${esc(c.terr)}` : '';
+  if (view === 'home') {
+    if (inPlay(code)) return `${esc(c.name)}<div class="sub">${terr ? terr + ' · ' : ''}${esc(REGIONS[c.region].name)} · click to ${store.selected.includes(c.region) ? 'remove' : 'add'}</div>`;
+    return `${esc(nameOf(code))}${terr ? `<div class="sub">${terr} · turn on “Include territories” to quiz</div>` : ''}`;
+  }
   if (view === 'quiz') {
     if (!active.has(code)) return null;
     return q.res[code] ? esc(c.name) : null;
   }
-  if (c && active.has(code)) return `${esc(c.name)}<div class="sub">${esc(REGIONS[c.region].name)}</div>`;
-  return `<span class="muted">${esc(nameOf(code))}</span>`;
+  if (c && active.has(code)) return `${esc(c.name)}<div class="sub">${terr ? terr + ' · ' : ''}${esc(REGIONS[c.region].name)}</div>`;
+  return `<span class="muted">${esc(nameOf(code))}</span>${terr ? `<div class="sub">${terr}</div>` : ''}`;
 }
 function showTip(html, x, y) {
   tip.innerHTML = html; tip.style.display = 'block';
@@ -479,8 +537,7 @@ sv.addEventListener('click', e => {
   const code = codeAt(e.target);
   if (!code) return;
   if (view === 'home') {
-    const c = COUNTRY[code];
-    if (c) toggleRegion(c.region);
+    if (inPlay(code)) toggleRegion(COUNTRY[code].region);
   } else if (view === 'quiz') {
     if (q.mode === 'find') onFindClick(code);
   }
@@ -530,15 +587,15 @@ function render() {
 
 function selectionPool() {
   const sel = new Set(store.selected);
-  return CONTINENTS.flatMap(c => c.regions).filter(r => sel.has(r.id)).flatMap(r => r.codes).filter(c => FEATS.has(c));
+  return CONTINENTS.flatMap(c => c.regions).filter(r => sel.has(r.id)).flatMap(regionCodes).filter(c => FEATS.has(c));
 }
 function poolInfo(codes) {
   const regs = [...new Set(codes.map(c => COUNTRY[c].region))];
-  const full = regs.reduce((a, r) => a + REGIONS[r].codes.length, 0) === codes.length;
-  const title = !full ? `${codes.length} countries`
-    : regs.length <= 3 ? regs.map(r => REGIONS[r].name).join(' + ')
-    : `${regs.length} regions · ${codes.length} countries`;
-  return { regs, full, title, key: full ? regs.slice().sort().join(',') : null };
+  const withTerr = codes.some(c => COUNTRY[c].terr);
+  const full = regs.reduce((a, r) => a + REGIONS[r].codes.length + (withTerr ? REGIONS[r].terr.length : 0), 0) === codes.length;
+  const title = !full ? `${codes.length} places`
+    : (regs.length <= 3 ? regs.map(r => REGIONS[r].name).join(' + ') : `${regs.length} regions · ${codes.length} places`) + (withTerr ? ' (with territories)' : '');
+  return { regs, full, title, key: full ? regs.slice().sort().join(',') + (withTerr ? '+t' : '') : null };
 }
 const weakOf = codes => codes.filter(c => store.stats[c] && store.stats[c].last !== 1);
 
@@ -552,23 +609,25 @@ function homeHtml() {
       <button class="chip" data-act="selLearned" ${learned.size ? '' : 'disabled'}>Select learned (${learned.size})</button>
       <button class="chip" data-act="selAll">All</button>
       <button class="chip" data-act="selNone">None</button>
-    </div>`;
+    </div>
+    <label class="tog small"><input type="checkbox" data-terr ${store.terr ? 'checked' : ''}> Include territories <span class="muted">(Greenland, Puerto Rico, French Guiana…)</span></label>`;
   for (const c of CONTINENTS) {
     const on = c.regions.filter(r => sel.has(r.id)).length;
-    const n = c.regions.reduce((a, r) => a + r.codes.length, 0);
+    const n = c.regions.reduce((a, r) => a + regionCodes(r).length, 0);
     h += `<div class="cont"><label class="cont-h"><input type="checkbox" data-cont="${c.name}" ${on === c.regions.length ? 'checked' : ''} ${on && on < c.regions.length ? 'data-ind' : ''}>
       <span>${c.name}</span><span class="n">${n}</span></label>`;
     for (const r of c.regions) {
-      const best = store.best['find:' + r.id];
+      const best = store.best['find:' + r.id + (store.terr && r.terr.length ? '+t' : '')];
+      const n = r.codes.length + (store.terr && r.terr.length ? ` +${r.terr.length}` : '');
       h += `<div class="reg"><label><input type="checkbox" data-reg="${r.id}" ${sel.has(r.id) ? 'checked' : ''}>
-        <span class="sw" style="background:${regionColor(r.id, 1)}"></span><span class="rn">${esc(r.name)}</span><span class="n">${r.codes.length}</span></label>
+        <span class="sw" style="background:${regionColor(r.id, 1)}"></span><span class="rn">${esc(r.name)}</span><span class="n">${n}</span></label>
         ${best ? `<span class="best" title="Best first-try score (find on map)">${best.pct}%</span>` : ''}
         <button class="learn ${learned.has(r.id) ? 'on' : ''}" data-act="learn" data-id="${r.id}">${learned.has(r.id) ? '✓ Learned' : 'Learned?'}</button></div>`;
     }
     h += `</div>`;
   }
   h += `</div><div class="pfoot">
-    <div class="small">${p.length ? `<b>${p.length}</b> countries · ${esc(poolInfo(p).title)}` : '<span class="muted">Select at least one region</span>'}</div>
+    <div class="small">${p.length ? `<b>${p.length}</b> ${store.terr ? 'places' : 'countries'} · ${esc(poolInfo(p).title)}` : '<span class="muted">Select at least one region</span>'}</div>
     <div class="btns">
       <button class="btn wide" data-act="study" ${dis}>Study</button>
       <button class="btn primary" data-act="quizFind" ${dis}>Quiz: find on map</button>
@@ -587,7 +646,8 @@ function studyHtml() {
   for (const rid of info.regs) {
     h += `<h3>${esc(REGIONS[rid].name)}</h3><ul class="clist">`;
     for (const c of pool.filter(c => COUNTRY[c].region === rid).sort((a, b) => nameOf(a).localeCompare(nameOf(b)))) {
-      h += `<li><button data-act="locate" data-code="${c}"><span class="dot ${resCls(store.stats[c]?.last)}"></span>${esc(nameOf(c))}</button></li>`;
+      const t = COUNTRY[c].terr ? ` <span class="muted small">(${esc(COUNTRY[c].terr.replace(/ \(.*\)/, ''))})</span>` : '';
+      h += `<li><button data-act="locate" data-code="${c}"><span class="dot ${resCls(store.stats[c]?.last)}"></span><span>${esc(nameOf(c))}${t}</span></button></li>`;
     }
     h += `</ul>`;
   }
@@ -701,6 +761,7 @@ panel.addEventListener('change', e => {
     ids.forEach(id => t.checked ? s.add(id) : s.delete(id));
     store.selected = [...s]; save(); paintAll(); render();
   } else if ('labels' in t.dataset) { store.labels = t.checked; save(); rescale(); }
+  else if ('terr' in t.dataset) { store.terr = t.checked; save(); paintAll(); render(); }
 });
 panel.addEventListener('submit', e => { e.preventDefault(); submitGuess(); });
 panel.addEventListener('pointerover', e => {
