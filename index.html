@@ -69,6 +69,8 @@ p { margin: 0 0 10px; }
 .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
 .best { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .learn { border: 1px dashed var(--border); background: none; border-radius: 999px; font-size: 11.5px; padding: 1px 8px; color: var(--muted); white-space: nowrap; }
+.reg .learn { padding: 1px 6px; }
+.pfoot .tog { margin: 0; }
 .learn.on { border-style: solid; border-color: var(--good); color: var(--good); font-weight: 600; }
 input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; flex: none; }
 .tog { display: flex; gap: 8px; align-items: center; margin: 8px 0; cursor: pointer; }
@@ -113,6 +115,10 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; m
 .lb { fill: var(--text); stroke: var(--halo); paint-order: stroke; stroke-linejoin: round; font-weight: 600; pointer-events: none; dominant-baseline: central; }
 .flash { animation: flash .75s; }
 @keyframes flash { 30%, 70% { fill: var(--bad); } }
+.flash-good { animation: flashgood .75s; }
+@keyframes flashgood { 20%, 60% { fill: var(--good); } }
+.hardtag { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--bad); border: 1px solid var(--bad); border-radius: 4px; padding: 0 5px; vertical-align: middle; }
+.learn.terr.on { border-color: var(--accent); color: var(--accent); }
 .ring { fill: none; stroke: var(--accent); stroke-width: 2.5; vector-effect: non-scaling-stroke; transform-box: fill-box; transform-origin: center; animation: pulse 1.2s ease-out infinite; pointer-events: none; }
 .ring.bad { stroke: var(--bad); }
 @keyframes pulse { 0% { transform: scale(.5); opacity: 1; } 100% { transform: scale(2.3); opacity: 0; } }
@@ -253,10 +259,15 @@ for (const [cont, regs] of REGION_DEFS) {
 // Persistence (per browser)
 // ---------------------------------------------------------------------------
 const STORE_KEY = 'countrydrill.v1';
-const store = { selected: [], learned: [], best: {}, stats: {}, labels: true, terr: false };
+const store = { selected: [], learned: [], best: {}, stats: {}, labels: true, terrRegions: [], hard: false };
 try { Object.assign(store, JSON.parse(localStorage.getItem(STORE_KEY)) || {}); } catch (e) {}
+if ('terr' in store) { // older versions had a single global toggle
+  if (store.terr) store.terrRegions = Object.keys(REGIONS).filter(id => REGIONS[id].terr.length);
+  delete store.terr;
+}
 store.selected = store.selected.filter(id => REGIONS[id]);
 store.learned = store.learned.filter(id => REGIONS[id]);
+store.terrRegions = store.terrRegions.filter(id => REGIONS[id]);
 function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(store)); } catch (e) {} }
 
 // ---------------------------------------------------------------------------
@@ -296,8 +307,9 @@ const RES_FILL = { 1: 'var(--good)', 2: 'var(--ok)', 3: 'var(--meh)', x: 'var(--
 const resCls = r => r ? 'r' + r : '';
 const nameOf = code => COUNTRY[code] ? COUNTRY[code].name : (EXTRA_NAMES[code] || FEATS.get(code)?.neName || '');
 // Whether a country/territory can be selected and quizzed right now.
-const inPlay = code => !!COUNTRY[code] && (!COUNTRY[code].terr || store.terr);
-const regionCodes = r => store.terr ? [...r.codes, ...r.terr] : r.codes;
+const terrOn = rid => store.terrRegions.includes(rid);
+const inPlay = code => !!COUNTRY[code] && (!COUNTRY[code].terr || terrOn(COUNTRY[code].region));
+const regionCodes = r => terrOn(r.id) ? [...r.codes, ...r.terr] : r.codes;
 const esc = s => s.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const fmtTime = ms => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
@@ -423,7 +435,8 @@ function fillOf(code) {
   if (!active.has(code)) return 'var(--land-off)';
   if (view === 'study') return regionColor(c.region, c.idx);
   const r = q && q.res[code];
-  if (r) return RES_FILL[r];
+  // Hard mode: answers don't stay colored during the quiz (only a just-missed target, briefly).
+  if (r && (view === 'results' || !q.hard || (q.locked && code === q.target))) return RES_FILL[r];
   if (view === 'quiz' && q.mode === 'type' && code === q.target) return 'var(--accent)';
   return 'var(--land)';
 }
@@ -470,12 +483,12 @@ function ring(code, cls = '', ms = 0) {
   return c;
 }
 
-function flash(code) {
-  const f = FEATS.get(code);
+function flash(code, kind = 'bad') {
+  const f = FEATS.get(code), cls = kind === 'good' ? 'flash-good' : 'flash';
   for (const el of [f.el, f.mk]) {
     if (!el) continue;
-    el.classList.remove('flash'); void el.getBoundingClientRect(); el.classList.add('flash');
-    setTimeout(() => el.classList.remove('flash'), 800);
+    el.classList.remove(cls); void el.getBoundingClientRect(); el.classList.add(cls);
+    setTimeout(() => el.classList.remove(cls), 800);
   }
 }
 
@@ -500,10 +513,10 @@ function tipHtml(code) {
   const terr = c && c.terr ? `Territory · ${esc(c.terr)}` : '';
   if (view === 'home') {
     if (inPlay(code)) return `${esc(c.name)}<div class="sub">${terr ? terr + ' · ' : ''}${esc(REGIONS[c.region].name)} · click to ${store.selected.includes(c.region) ? 'remove' : 'add'}</div>`;
-    return `${esc(nameOf(code))}${terr ? `<div class="sub">${terr} · turn on “Include territories” to quiz</div>` : ''}`;
+    return `${esc(nameOf(code))}${terr ? `<div class="sub">${terr} · turn on territories for ${esc(REGIONS[c.region].name)} to quiz</div>` : ''}`;
   }
   if (view === 'quiz') {
-    if (!active.has(code)) return null;
+    if (!active.has(code) || q.hard) return null;
     return q.res[code] ? esc(c.name) : null;
   }
   if (c && active.has(code)) return `${esc(c.name)}<div class="sub">${terr ? terr + ' · ' : ''}${esc(REGIONS[c.region].name)}</div>`;
@@ -591,11 +604,18 @@ function selectionPool() {
 }
 function poolInfo(codes) {
   const regs = [...new Set(codes.map(c => COUNTRY[c].region))];
+  const set = new Set(codes);
+  // "Full" = every region is complete, either countries only or countries + all its territories.
+  const parts = regs.map(rid => {
+    const r = REGIONS[rid], t = r.terr.filter(c => set.has(c)).length;
+    const ok = r.codes.every(c => set.has(c)) && (t === 0 || t === r.terr.length);
+    return ok ? rid + (t ? '+t' : '') : null;
+  });
+  const full = parts.every(Boolean);
   const withTerr = codes.some(c => COUNTRY[c].terr);
-  const full = regs.reduce((a, r) => a + REGIONS[r].codes.length + (withTerr ? REGIONS[r].terr.length : 0), 0) === codes.length;
   const title = !full ? `${codes.length} places`
     : (regs.length <= 3 ? regs.map(r => REGIONS[r].name).join(' + ') : `${regs.length} regions · ${codes.length} places`) + (withTerr ? ' (with territories)' : '');
-  return { regs, full, title, key: full ? regs.slice().sort().join(',') + (withTerr ? '+t' : '') : null };
+  return { regs, full, title, key: full ? parts.sort().join(',') : null };
 }
 const weakOf = codes => codes.filter(c => store.stats[c] && store.stats[c].last !== 1);
 
@@ -609,25 +629,29 @@ function homeHtml() {
       <button class="chip" data-act="selLearned" ${learned.size ? '' : 'disabled'}>Select learned (${learned.size})</button>
       <button class="chip" data-act="selAll">All</button>
       <button class="chip" data-act="selNone">None</button>
+      <button class="chip" data-act="terrAll">${allTerrOn() ? 'Remove' : 'Add'} all territories</button>
     </div>
-    <label class="tog small"><input type="checkbox" data-terr ${store.terr ? 'checked' : ''}> Include territories <span class="muted">(Greenland, Puerto Rico, French Guiana…)</span></label>`;
+    <p class="muted small">Tap <b>+N terr.</b> on a region to also quiz its territories (Greenland, Puerto Rico, French Guiana…).</p>`;
   for (const c of CONTINENTS) {
     const on = c.regions.filter(r => sel.has(r.id)).length;
     const n = c.regions.reduce((a, r) => a + regionCodes(r).length, 0);
     h += `<div class="cont"><label class="cont-h"><input type="checkbox" data-cont="${c.name}" ${on === c.regions.length ? 'checked' : ''} ${on && on < c.regions.length ? 'data-ind' : ''}>
       <span>${c.name}</span><span class="n">${n}</span></label>`;
     for (const r of c.regions) {
-      const best = store.best['find:' + r.id + (store.terr && r.terr.length ? '+t' : '')];
-      const n = r.codes.length + (store.terr && r.terr.length ? ` +${r.terr.length}` : '');
+      const bk = r.id + (terrOn(r.id) ? '+t' : '');
+      const best = store.best['find:' + bk], hard = store.best['find!:' + bk];
+      const n = r.codes.length;
       h += `<div class="reg"><label><input type="checkbox" data-reg="${r.id}" ${sel.has(r.id) ? 'checked' : ''}>
         <span class="sw" style="background:${regionColor(r.id, 1)}"></span><span class="rn">${esc(r.name)}</span><span class="n">${n}</span></label>
-        ${best ? `<span class="best" title="Best first-try score (find on map)">${best.pct}%</span>` : ''}
+        ${best || hard ? `<span class="best" title="Best first-try score, find on map (H = hard mode)">${best ? best.pct + '%' : ''}${best && hard ? ' · ' : ''}${hard ? 'H ' + hard.pct + '%' : ''}</span>` : ''}
+        ${r.terr.length ? `<button class="learn terr ${terrOn(r.id) ? 'on' : ''}" data-act="terr" data-id="${r.id}" title="Territories: ${esc(r.terr.map(nameOf).join(', '))}">+${r.terr.length} terr.</button>` : ''}
         <button class="learn ${learned.has(r.id) ? 'on' : ''}" data-act="learn" data-id="${r.id}">${learned.has(r.id) ? '✓ Learned' : 'Learned?'}</button></div>`;
     }
     h += `</div>`;
   }
   h += `</div><div class="pfoot">
-    <div class="small">${p.length ? `<b>${p.length}</b> ${store.terr ? 'places' : 'countries'} · ${esc(poolInfo(p).title)}` : '<span class="muted">Select at least one region</span>'}</div>
+    <div class="small">${p.length ? `<b>${p.length}</b> ${p.some(c => COUNTRY[c].terr) ? 'places' : 'countries'} · ${esc(poolInfo(p).title)}` : '<span class="muted">Select at least one region</span>'}</div>
+    ${hardToggle()}
     <div class="btns">
       <button class="btn wide" data-act="study" ${dis}>Study</button>
       <button class="btn primary" data-act="quizFind" ${dis}>Quiz: find on map</button>
@@ -651,7 +675,7 @@ function studyHtml() {
     }
     h += `</ul>`;
   }
-  h += `</div><div class="pfoot"><div class="btns">
+  h += `</div><div class="pfoot">${hardToggle()}<div class="btns">
     <button class="btn primary" data-act="quizFind">Quiz: find on map</button>
     <button class="btn primary" data-act="quizType">Quiz: type names</button></div></div>`;
   return h;
@@ -660,7 +684,7 @@ function studyHtml() {
 function quizHtml() {
   const type = q.mode === 'type';
   return `<div class="pbody">
-    <div class="qbar"><button class="back" data-act="quit">✕ Quit</button><span id="qprog"></span><span id="qtime">0:00</span></div>
+    <div class="qbar"><button class="back" data-act="quit">✕ Quit</button><span id="qprog"></span>${q.hard ? '<span class="hardtag">Hard</span>' : ''}<span id="qtime">0:00</span></div>
     <div class="bar"><i id="qbar"></i></div>
     <div class="prompt" id="qprompt"></div>
     ${type ? `<form class="qform" id="qform"><input id="qin" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Country name…"><button class="btn primary">Check</button></form>` : ''}
@@ -693,7 +717,7 @@ function resultsHtml() {
   const pct = Math.round(100 * first / total);
   const missed = q.queue.filter(c => q.res[c] !== 1).sort((a, b) => (q.res[a] === 'x' ? 0 : 1) - (q.res[b] === 'x' ? 0 : 1) || nameOf(a).localeCompare(nameOf(b)));
   let h = `<div class="pbody"><button class="back" data-act="home">← Regions</button>
-    <h2>${q.mode === 'find' ? 'Find on map' : 'Type names'} · ${esc(poolInfo(q.queue).title)}</h2>
+    <h2>${q.mode === 'find' ? 'Find on map' : 'Type names'}${q.hard ? ' <span class="hardtag">Hard</span>' : ''} · ${esc(poolInfo(q.queue).title)}</h2>
     <div class="score">${pct}%${q.newBest ? '<span class="newbest">New best</span>' : ''}</div>
     <p class="muted">${first} of ${total} on the first try · ${fmtTime(q.elapsed)}</p>
     <div class="tally">${tallyHtml()}</div>`;
@@ -706,7 +730,7 @@ function resultsHtml() {
   }
   const info = poolInfo(q.queue);
   const canLearn = info.full && info.regs.some(r => !store.learned.includes(r));
-  h += `</div><div class="pfoot"><div class="btns">
+  h += `</div><div class="pfoot">${hardToggle()}<div class="btns">
     ${missed.length ? `<button class="btn primary wide" data-act="retryMissed">Retry the ${missed.length} I missed</button>` : ''}
     <button class="btn" data-act="again">Same quiz again</button>
     <button class="btn" data-act="otherMode">${q.mode === 'find' ? 'Try typing mode' : 'Try find mode'}</button>
@@ -719,6 +743,12 @@ function resultsHtml() {
 // ---------------------------------------------------------------------------
 // Panel actions
 // ---------------------------------------------------------------------------
+function hardToggle() {
+  return `<label class="tog small"><input type="checkbox" data-hard ${store.hard ? 'checked' : ''}><span>Hard mode <span class="muted">— answers don't stay colored</span></span></label>`;
+}
+const TERR_REGIONS = Object.keys(REGIONS).filter(id => REGIONS[id].terr.length);
+const allTerrOn = () => TERR_REGIONS.every(terrOn);
+
 function toggleRegion(id) {
   const s = new Set(store.selected);
   s.has(id) ? s.delete(id) : s.add(id);
@@ -735,6 +765,12 @@ const ACTIONS = {
     s.has(id) ? s.delete(id) : s.add(id);
     store.learned = [...s]; save(); render();
   },
+  terr: b => {
+    const s = new Set(store.terrRegions), id = b.dataset.id;
+    s.has(id) ? s.delete(id) : s.add(id);
+    store.terrRegions = [...s]; save(); paintAll(); render();
+  },
+  terrAll: () => { store.terrRegions = allTerrOn() ? [] : TERR_REGIONS.slice(); save(); paintAll(); render(); },
   study: () => { pool = selectionPool(); setView('study'); },
   quizFind: () => startQuiz('find', view === 'study' ? pool : selectionPool()),
   quizType: () => startQuiz('type', view === 'study' ? pool : selectionPool()),
@@ -761,7 +797,7 @@ panel.addEventListener('change', e => {
     ids.forEach(id => t.checked ? s.add(id) : s.delete(id));
     store.selected = [...s]; save(); paintAll(); render();
   } else if ('labels' in t.dataset) { store.labels = t.checked; save(); rescale(); }
-  else if ('terr' in t.dataset) { store.terr = t.checked; save(); paintAll(); render(); }
+  else if ('hard' in t.dataset) { store.hard = t.checked; save(); }
 });
 panel.addEventListener('submit', e => { e.preventDefault(); submitGuess(); });
 panel.addEventListener('pointerover', e => {
@@ -782,7 +818,8 @@ function startQuiz(mode, codes) {
   stopTimer();
   pool = codes.slice();
   const info = poolInfo(pool);
-  q = { mode, queue: shuffle(pool), i: -1, tries: 0, res: {}, start: Date.now(), bestKey: info.key ? `${mode}:${info.key}` : null };
+  const hard = store.hard;
+  q = { mode, hard, queue: shuffle(pool), i: -1, tries: 0, res: {}, start: Date.now(), bestKey: info.key ? `${mode}${hard ? '!' : ''}:${info.key}` : null };
   setView('quiz');
   timer = setInterval(() => { const el = $('#qtime'); if (el) el.textContent = fmtTime(Date.now() - q.start); }, 500);
   next();
@@ -811,10 +848,12 @@ function setRes(code, r) {
 
 function onFindClick(code) {
   if (q.locked || !active.has(code)) return;
-  if (q.res[code]) { fb(`That's ${esc(nameOf(code))}`, 'info'); return; }
+  // In hard mode answered countries look unanswered, so clicking one is just a wrong guess.
+  if (q.res[code] && !q.hard) { fb(`That's ${esc(nameOf(code))}`, 'info'); return; }
   if (code === q.target) {
     setRes(code, q.tries + 1);
     fb(`✓ ${esc(nameOf(code))}`, 'good');
+    if (q.hard) flash(code, 'good');
     next();
   } else {
     q.tries++;
