@@ -153,6 +153,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; m
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script src="map-data.js"></script>
 <script>
 // ---------------------------------------------------------------------------
 // Regions. Edit freely: "code Name|alias|alias; ..." (code = ISO 3166 numeric,
@@ -188,7 +189,7 @@ const REGION_DEFS = [
   ]],
   ['Oceania', [
     ['aus', 'Australia & Melanesia', '036 Australia; 554 New Zealand; 598 Papua New Guinea|png; 090 Solomon Islands; 548 Vanuatu; 242 Fiji'],
-    ['pac', 'Pacific Islands', '882 Samoa; 776 Tonga; 296 Kiribati; TV Tuvalu; 520 Nauru; 584 Marshall Islands; 583 Micronesia; 585 Palau'],
+    ['pac', 'Pacific Islands', '882 Samoa; 776 Tonga; 296 Kiribati; 798 Tuvalu; 520 Nauru; 584 Marshall Islands; 583 Micronesia; 585 Palau'],
   ]],
 ];
 
@@ -209,7 +210,6 @@ const TERR_DEFS = {
   pac: '316 Guam^USA; 580 Northern Mariana Islands^USA; 016 American Samoa^USA; 258 French Polynesia|tahiti^France; 876 Wallis and Futuna^France; 184 Cook Islands^New Zealand; 570 Niue^New Zealand; TK Tokelau^New Zealand; 612 Pitcairn Islands|pitcairn^UK',
 };
 
-const MAP_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-50m.json';
 // Map pieces without an ISO id (or that should be dissolved into a country).
 const NAME_TO_CODE = { 'Kosovo': 'XK', 'Somaliland': '706', 'N. Cyprus': '196', 'Indian Ocean Ter.': 'CX' };
 // Overseas parts that Natural Earth draws as part of the parent country:
@@ -226,7 +226,6 @@ const SPLITS = [
 ];
 // Nicer names for the shapes that are never quizzed.
 const EXTRA_NAMES = { '260': 'French Southern & Antarctic Lands', '334': 'Heard & McDonald Islands', 'x-Siachen Glacier': 'Siachen Glacier (disputed)' };
-const TUVALU = [179.2, -8.52]; // not in the 50m dataset; drawn as a dot
 
 const norm = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
   .replace(/&/g, ' and ').replace(/\bst\.?\s+/g, 'saint ')
@@ -317,10 +316,9 @@ const fmtTime = ms => { const s = Math.round(ms / 1000); return `${Math.floor(s 
 // ---------------------------------------------------------------------------
 // Map setup
 // ---------------------------------------------------------------------------
-async function init() {
-  let topo;
-  try { topo = await d3.json(MAP_URL); }
-  catch (e) { $('#loading').textContent = 'Could not load map data — this page needs an internet connection.'; return; }
+function init() {
+  const topo = window.COUNTRIES_TOPO;
+  if (!topo || !window.d3 || !window.topojson) { $('#loading').textContent = 'Could not load the map — check your internet connection and that map-data.js is next to this page.'; return; }
 
   const groups = new Map();
   for (const g of topo.objects.countries.geometries) {
@@ -350,7 +348,6 @@ async function init() {
     else shapes.set(to, { geometry: { type: 'MultiPolygon', coordinates: take }, neName: COUNTRY[to]?.name || to });
   }
   for (const [code, s] of shapes) FEATS.set(code, makeFeat(code, { type: 'Feature', geometry: s.geometry }, s.neName));
-  FEATS.set('TV', makeFeat('TV', { type: 'Feature', geometry: { type: 'Point', coordinates: TUVALU } }, 'Tuvalu'));
 
   for (const f of FEATS.values()) {
     if (f.geo.geometry.type !== 'Point') f.el = gC.append('path').attr('class', 'c').attr('data-code', f.code).node();
